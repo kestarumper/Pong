@@ -8,7 +8,7 @@ if (!gl) {
 const POINT_SIZE = canvas.clientHeight * 0.025;
 const LINE_WIDTH = canvas.clientWidth * 0.0025;
 const PIXELS_PER_SEC = canvas.clientWidth * 0.333;
-const ACCELERATION = 1.01;
+const ACCELERATION = 1.1;
 
 var vertexShaderSource = `#version 300 es
 
