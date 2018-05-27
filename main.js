@@ -15,12 +15,15 @@ var vertexShaderSource = `#version 300 es
 // an attribute is an input (in) to a vertex shader.
 // It will receive data from a buffer
 in vec2 a_position;
+in vec2 a_texcoord;
 
 // Used to pass in the resolution of the canvas
 uniform vec2 u_resolution;
 
 // translation to add to position
 uniform vec2 u_translation;
+
+out vec2 v_texcoord;
 
 // all shaders have a main function
 void main() {
@@ -38,6 +41,8 @@ void main() {
   
   gl_Position = vec4(clipSpace, 0, 1);
   gl_PointSize = ${POINT_SIZE.toFixed(1)};
+
+  v_texcoord = a_texcoord;
 }
 `;
 
@@ -45,13 +50,18 @@ var fragmentShaderSource = `#version 300 es
 
 precision mediump float;
 
+// Passed in from the vertex shader.
+in vec2 v_texcoord;
+
+// The texture.
+uniform sampler2D u_texture;
 uniform vec4 u_color;
 
 // we need to declare an output for the fragment shader
 out vec4 outColor;
 
 void main() {
-    outColor = u_color;
+    outColor = texture(u_texture, v_texcoord) + u_color;
 }
 `;
 
@@ -120,12 +130,10 @@ const DATA = {
             0, 0,
             plankWidth, 0,
             0, plankHeight,
-            0, plankHeight,
-            plankWidth, 0,
             plankWidth, plankHeight,
         ],
-        type: gl.TRIANGLES,
-        vertices: 6,
+        type: gl.TRIANGLE_STRIP,
+        vertices: 4,
     },
 
     ball: {
@@ -147,10 +155,10 @@ const DATA = {
         geometry: [
             -canvas.clientWidth * 0.25, -canvas.clientHeight * 0.25,
             canvas.clientWidth * 0.25, -canvas.clientHeight * 0.25,
-            canvas.clientWidth * 0.25, canvas.clientHeight * 0.25, 
+            canvas.clientWidth * 0.25, canvas.clientHeight * 0.25,
             -canvas.clientWidth * 0.25, canvas.clientHeight * 0.25,
         ],
-        type: gl.LINE_LOOP,
+        type: gl.TRIANGLE_FAN,
         vertices: 4,
     },
 
@@ -171,11 +179,13 @@ var program = createProgramFromSources(gl, [vertexShaderSource], [fragmentShader
 
 // look up where the vertex data needs to go.
 var positionAttributeLocation = gl.getAttribLocation(program, "a_position");
+var texcoordAttributeLocation = gl.getAttribLocation(program, "a_texcoord");
 
 // look up uniform locations
 var resolutionUniformLocation = gl.getUniformLocation(program, "u_resolution");
 var colorLocation = gl.getUniformLocation(program, "u_color");
 var translationLocation = gl.getUniformLocation(program, "u_translation");
+var textureUniformLocation = gl.getUniformLocation(program, "u_texture");
 
 class Drawable {
     constructor(geometry, verticesNumber, type, translation, color) {
@@ -244,9 +254,50 @@ class Drawable {
     }
 }
 
-class Plank extends Drawable {
-    constructor(geometry, verticesNumber, type, keys, translation, color) {
+class DrawableTexture extends Drawable {
+    constructor(geometry, verticesNumber, type, translation, color, textureUrl) {
         super(geometry, verticesNumber, type, translation, color);
+
+        this.texture = loadTexture(gl, textureUrl);
+        this.textureCoordBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.textureCoordBuffer);
+
+        this.textureCoordinates = [
+            // Front
+            0, 0,
+            1, 0,
+            1, 1,
+            0, 1,
+        ];
+
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(this.textureCoordinates),
+            gl.STATIC_DRAW);
+    }
+
+    draw() {
+        const num = 2; // every coordinate composed of 2 values
+        const type = gl.FLOAT; // the data in the buffer is 32 bit float
+        const normalize = false; // don't normalize
+        const stride = 0; // how many bytes to get from one set to the next
+        const offset = 0; // how many bytes inside the buffer to start from
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.textureCoordBuffer);
+        gl.vertexAttribPointer(texcoordAttributeLocation, num, type, normalize, stride, offset);
+        gl.enableVertexAttribArray(texcoordAttributeLocation);
+
+        // Tell WebGL we want to affect texture unit 0
+        gl.activeTexture(gl.TEXTURE0);
+        // Bind the texture to texture unit 0
+        gl.bindTexture(gl.TEXTURE_2D, this.texture);
+        // Tell the shader we bound the texture to texture unit 0
+        gl.uniform1i(textureUniformLocation, 0);
+
+        super.draw();
+    }
+}
+
+class Plank extends DrawableTexture {
+    constructor(geometry, verticesNumber, type, keys, translation, color, textureUrl) {
+        super(geometry, verticesNumber, type, translation, color, textureUrl);
 
         this.moveVector = [0, 1];
         this.keys = keys || { up: 'w', down: 's' };
@@ -262,10 +313,10 @@ class Plank extends Drawable {
     }
 
     moveUpdate(deltaTime) {
-        if(this.keysPressed[this.keys.up] === true) {
+        if (this.keysPressed[this.keys.up] === true) {
             this.translation[1] += PIXELS_PER_SEC * deltaTime;
         }
-        if(this.keysPressed[this.keys.down] === true) {
+        if (this.keysPressed[this.keys.down] === true) {
             this.translation[1] -= PIXELS_PER_SEC * deltaTime;
         }
     }
@@ -273,7 +324,7 @@ class Plank extends Drawable {
 
 class Ball extends Drawable {
     constructor(geometry, verticesNumber, type, translation, moveVector, color) {
-        super(geometry, verticesNumber, type, translation);
+        super(geometry, verticesNumber, type, translation, color);
         this.moveVector = moveVector || this.randomMoveVector();
         this.collidables = [];
         this.isInsideCollidable = false;
@@ -293,7 +344,7 @@ class Ball extends Drawable {
     }
 
     bounce(modifiers) {
-        if(modifiers != null) {
+        if (modifiers != null) {
             this.isInsideCollidable = true;
             this.moveVector[0] = this.moveVector[0] * modifiers[0] * ACCELERATION;
             this.moveVector[1] = this.moveVector[1] * modifiers[1] * ACCELERATION;
@@ -331,7 +382,7 @@ class Ball extends Drawable {
     }
 }
 
-drawables.push(new Plank(DATA.plank.geometry, 6, DATA.plank.type));
+drawables.push(new Plank(DATA.plank.geometry, DATA.plank.vertices, DATA.plank.type, null, null, [0, 0, 0, 0], 'wood2.jpg'));
 drawables.push(
     new Plank(
         DATA.plank.geometry,
@@ -339,26 +390,29 @@ drawables.push(
         DATA.plank.type,
         { up: 'o', down: 'l' },
         [canvas.clientWidth - plankWidth, canvas.clientHeight - plankHeight],
+        [0, 0, 0, 0],
+        'wood.jpg'
     )
 );
 drawables.push(
-    new Drawable(
+    new DrawableTexture(
         DATA.fieldCenter.geometry,
         DATA.fieldCenter.vertices,
         DATA.fieldCenter.type,
         [canvas.clientWidth / 2, canvas.clientHeight / 2],
-        [1, 0, 0, 1],
+        [0, 0, 0, 1],
+        'texture.png'
     )
 )
-drawables.push(
-    new Drawable(
-        DATA.fieldCenterRhombus.geometry,
-        DATA.fieldCenterRhombus.vertices,
-        DATA.fieldCenterRhombus.type,
-        [canvas.clientWidth / 2, canvas.clientHeight / 2],
-        [0, 0, 1, 1],
-    )
-);
+// drawables.push(
+//     new Drawable(
+//         DATA.fieldCenterRhombus.geometry,
+//         DATA.fieldCenterRhombus.vertices,
+//         DATA.fieldCenterRhombus.type,
+//         [canvas.clientWidth / 2, canvas.clientHeight / 2],
+//         [0, 0, 1, 1],
+//     )
+// );
 drawables.push(
     new Drawable(
         DATA.fieldLine.geometry,
@@ -369,19 +423,21 @@ drawables.push(
     )
 );
 
-function addNewBall(drawables) {
+function addNewBall(drawables, color) {
     var ball = new Ball(
         DATA.ball.geometry,
         DATA.ball.vertices,
         DATA.ball.type,
         [canvas.clientWidth / 2, canvas.clientHeight / 2],
+        null,
+        color
     );
     ball.registerCollisionObject(drawables[0]);
     ball.registerCollisionObject(drawables[1]);
     drawables.push(ball);
 }
 for (let i = 0; i < 1; i += 1) {
-    addNewBall(drawables);
+    addNewBall(drawables, [1, 0, 0, 1]);
 }
 
 // Draw the scene.
@@ -409,16 +465,79 @@ function drawScene(now) {
 
     for (var obj of drawables) {
         obj.moveUpdate(deltaTime);
+    }
+
+    for (var obj of drawables) {
         obj.draw();
     }
 
     requestAnimationFrame(drawScene);
 }
 
+
+//
+// Initialize a texture and load an image.
+// When the image finished loading copy it into the texture.
+//
+function loadTexture(gl, url) {
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+
+    // Because images have to be download over the internet
+    // they might take a moment until they are ready.
+    // Until then put a single pixel in the texture so we can
+    // use it immediately. When the image has finished downloading
+    // we'll update the texture with the contents of the image.
+    const level = 0;
+    const internalFormat = gl.RGBA;
+    const width = 1;
+    const height = 1;
+    const border = 0;
+    const srcFormat = gl.RGBA;
+    const srcType = gl.UNSIGNED_BYTE;
+    const pixel = new Uint8Array([255, 255, 255, 255]);  // opaque blue
+    gl.texImage2D(gl.TEXTURE_2D, level, internalFormat,
+        width, height, border, srcFormat, srcType,
+        pixel);
+
+    const image = new Image();
+    image.onload = function () {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, level, internalFormat,
+            srcFormat, srcType, image);
+
+        // WebGL1 has different requirements for power of 2 images
+        // vs non power of 2 images so check if the image is a
+        // power of 2 in both dimensions.
+        if (isPowerOf2(image.width) && isPowerOf2(image.height)) {
+            // Yes, it's a power of 2. Generate mips.
+            gl.generateMipmap(gl.TEXTURE_2D);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        } else {
+            // No, it's not a power of 2. Turn of mips and set
+            // wrapping to clamp to edge
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        }
+    };
+    image.src = url;
+
+    return texture;
+}
+
+function isPowerOf2(value) {
+    return (value & (value - 1)) == 0;
+}
+
+
+///////////////////////////////////////START
 requestAnimationFrame(drawScene);
+////////////////////////////////////////////
 
 window.addEventListener('keypress', (event) => {
-    if(event.key === '`') {
+    if (event.key === '`') {
         addNewBall(drawables);
     }
 });
